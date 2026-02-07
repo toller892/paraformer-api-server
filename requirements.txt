@@ -1,0 +1,7 @@
+funasr
+modelscope
+torch
+torchaudio
+fastapi
+uvicorn
+requests
