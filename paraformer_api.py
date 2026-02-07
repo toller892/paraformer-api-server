@@ -4,43 +4,26 @@ Paraformer API 服务
 纯净版 - 仅提供语音转写功能，支持 Token 鉴权
 """
 import os
-import sys
 import re
 import tempfile
 from pathlib import Path
 from typing import Optional
-
-# 抑制模型下载的频繁日志
-os.environ["MODELSCOPE_DOWNLOAD_PROGRESS"] = "0"
-os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 import requests
 import uvicorn
 from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-
-# 自定义进度回调
-class DownloadProgress:
-    def __init__(self):
-        self.last_percent = -1
-    
-    def __call__(self, current, total):
-        if total > 0:
-            percent = int(current * 100 / total)
-            if percent != self.last_percent and percent % 10 == 0:
-                print(f"模型下载进度: {percent}%", flush=True)
-                self.last_percent = percent
-
-print("正在加载 Paraformer 模型（首次需下载约 1GB）...", flush=True)
-
 from funasr import AutoModel
-model = AutoModel(model="paraformer-zh")
-print("模型加载完成！", flush=True)
 
 # ============ 配置 ============
 API_TOKEN = os.getenv("API_TOKEN", "")  # 必须设置环境变量
 PORT = int(os.getenv("PORT", 8000))
+
+# ============ 初始化模型 ============
+print("正在加载 Paraformer 模型（首次需下载约 1GB）...")
+model = AutoModel(model="paraformer-zh")
+print("模型加载完成！")
 
 # ============ FastAPI 应用 ============
 app = FastAPI(
