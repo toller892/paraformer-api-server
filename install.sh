@@ -3,10 +3,16 @@
 
 set -e
 
-API_TOKEN="pf-vyq7G1uKOhFFoCZ3g8xTNpyC3aMvYqo"
 PORT=8000
 
 echo "=== Paraformer API 一键部署 ==="
+
+# 输入 Token
+read -p "请输入 API Token: " API_TOKEN
+if [ -z "$API_TOKEN" ]; then
+    echo "错误: Token 不能为空"
+    exit 1
+fi
 
 # 1. 安装依赖
 echo ">>> 安装 Python 依赖..."
@@ -23,7 +29,6 @@ API_TOKEN=$API_TOKEN nohup python paraformer_api.py > paraformer.log 2>&1 &
 echo ""
 echo "=== 部署完成 ==="
 echo "端口: $PORT"
-echo "Token: $API_TOKEN"
 echo "日志: tail -f paraformer.log"
 echo ""
 echo "验证: curl http://localhost:$PORT/health"
