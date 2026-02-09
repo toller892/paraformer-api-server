@@ -18,6 +18,12 @@ from funasr import AutoModel
 
 # ============ 配置 ============
 API_TOKEN = os.getenv("API_TOKEN", "")
+
+# 模型缓存路径（Coolify/Docker 部署时挂载为持久卷）
+MODELSCOPE_CACHE = os.getenv("MODELSCOPE_CACHE", "")
+if MODELSCOPE_CACHE:
+    os.environ["MODELSCOPE_CACHE"] = MODELSCOPE_CACHE
+    os.makedirs(MODELSCOPE_CACHE, exist_ok=True)
 PORT = int(os.getenv("PORT", 8000))
 
 # ============ 初始化模型 ============

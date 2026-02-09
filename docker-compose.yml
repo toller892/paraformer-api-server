@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  paraformer-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - API_TOKEN=${API_TOKEN:?请设置 API_TOKEN}
+      - MODELSCOPE_CACHE=/data/models
+    volumes:
+      - model-cache:/data/models
+    restart: unless-stopped
+
+volumes:
+  model-cache:
