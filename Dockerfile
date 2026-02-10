@@ -10,6 +10,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg git curl && \
     rm -rf /var/lib/apt/lists/*
 
+# 先装 PyTorch (ARM 兼容，CPU 版本)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
 # 安装 Python 依赖
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
