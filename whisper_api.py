@@ -52,9 +52,11 @@ def _load_models():
             print("正在加载 pyannote 说话人分离模型...")
             try:
                 from pyannote.audio import Pipeline
+                from huggingface_hub import login
+                # 用 HF_TOKEN 登录
+                login(token=HF_TOKEN, add_to_git_credential=False)
                 diarization_pipeline = Pipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    token=HF_TOKEN,
                     cache_dir=WHISPER_CACHE,
                 )
                 # CPU 模式
