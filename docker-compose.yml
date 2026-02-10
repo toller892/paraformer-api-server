@@ -1,16 +1,23 @@
 version: "3.8"
 
 services:
-  paraformer-api:
+  whisper-api:
     build: .
     ports:
       - "8000:8000"
     environment:
       - API_TOKEN=${API_TOKEN:?请设置 API_TOKEN}
-      - MODELSCOPE_CACHE=/data/models
+      - WHISPER_MODEL=large-v3-turbo
+      - WHISPER_CACHE=/data/models
     volumes:
       - model-cache:/data/models
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
 
 volumes:
   model-cache:

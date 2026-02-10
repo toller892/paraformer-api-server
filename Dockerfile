@@ -5,9 +5,9 @@ WORKDIR /app
 # Whisper 模型缓存路径
 ENV WHISPER_CACHE=/data/models
 
-# 安装系统依赖（ffmpeg 用于音频解码）
+# 安装系统依赖
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends ffmpeg git curl && \
     rm -rf /var/lib/apt/lists/*
 
 # 安装 Python 依赖

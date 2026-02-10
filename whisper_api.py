@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -30,10 +31,26 @@ WHISPER_CACHE = os.getenv("WHISPER_CACHE", "/data/models")
 os.environ["XDG_CACHE_HOME"] = WHISPER_CACHE
 os.makedirs(WHISPER_CACHE, exist_ok=True)
 
-# ============ 初始化模型 ============
-print(f"正在加载 Whisper {MODEL_NAME} 模型...")
-model = whisper.load_model(MODEL_NAME, download_root=WHISPER_CACHE)
-print(f"✅ Whisper {MODEL_NAME} 加载完成！设备: {model.device}")
+# ============ 模型（异步加载，避免 Coolify 健康检查超时） ============
+model = None
+model_ready = threading.Event()
+model_error = None
+
+
+def _load_model():
+    global model, model_error
+    try:
+        print(f"正在加载 Whisper {MODEL_NAME} 模型...")
+        model = whisper.load_model(MODEL_NAME, download_root=WHISPER_CACHE)
+        print(f"✅ Whisper {MODEL_NAME} 加载完成！设备: {model.device}")
+    except Exception as e:
+        model_error = str(e)
+        print(f"❌ 模型加载失败: {e}")
+    finally:
+        model_ready.set()
+
+
+threading.Thread(target=_load_model, daemon=True).start()
 
 # ============ FastAPI 应用 ============
 app = FastAPI(
@@ -123,17 +140,29 @@ def transcribe_audio(file_path: str, language: str = "zh") -> dict:
 @app.get("/")
 async def root():
     return {
-        "status": "ok",
+        "status": "ready" if model_ready.is_set() and model else "loading",
         "service": "Whisper ASR API",
         "version": "4.0.0",
         "model": MODEL_NAME,
-        "device": str(model.device),
+        "device": str(model.device) if model else "loading",
     }
 
 
 @app.get("/health")
 async def health():
+    if model_error:
+        raise HTTPException(503, f"模型加载失败: {model_error}")
+    if not model_ready.is_set():
+        return {"status": "loading", "model": MODEL_NAME}
     return {"status": "healthy", "model": MODEL_NAME}
+
+
+def _require_model():
+    """确保模型已加载，否则返回 503"""
+    if not model_ready.is_set():
+        raise HTTPException(503, "模型正在加载中，请稍后重试")
+    if model_error or model is None:
+        raise HTTPException(503, f"模型不可用: {model_error}")
 
 
 @app.post("/transcribe")
@@ -162,6 +191,7 @@ async def transcribe(
 
     tmp_path = None
     try:
+        _require_model()
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
@@ -206,6 +236,7 @@ async def transcribe_url(
     """
     tmp_path = None
     try:
+        _require_model()
         download_url = convert_gdrive_url(audio_url)
 
         resp = requests.get(download_url, timeout=300, stream=True)
