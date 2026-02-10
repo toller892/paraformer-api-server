@@ -280,5 +280,5 @@ if __name__ == "__main__":
         exit(1)
 
     print(f"🚀 Whisper ASR API 启动在 http://0.0.0.0:{PORT}")
-    print(f"   模型: {MODEL_NAME} | 设备: {model.device}")
+    print(f"   模型: {MODEL_NAME} (异步加载中...)")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
