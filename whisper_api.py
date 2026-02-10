@@ -54,7 +54,7 @@ def _load_models():
                 from pyannote.audio import Pipeline
                 diarization_pipeline = Pipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    use_auth_token=HF_TOKEN,
+                    token=HF_TOKEN,
                     cache_dir=WHISPER_CACHE,
                 )
                 # CPU 模式
