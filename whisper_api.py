@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Whisper ASR API 服务 v4.0
+Whisper ASR API 服务 v5.0
 - 基于 OpenAI Whisper large-v3-turbo
-- 自动音频预处理
+- 说话人分离 (pyannote-audio)
 - Token 鉴权
 - 支持文件上传和 URL 转写
 """
 import os
 import re
-import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -26,23 +25,48 @@ API_TOKEN = os.getenv("API_TOKEN", "")
 PORT = int(os.getenv("PORT", 8000))
 MODEL_NAME = os.getenv("WHISPER_MODEL", "large-v3-turbo")
 WHISPER_CACHE = os.getenv("WHISPER_CACHE", "/data/models")
+HF_TOKEN = os.getenv("HF_TOKEN", "")  # HuggingFace token for pyannote
 
-# 设置 Whisper 下载目录
+# 设置缓存目录
 os.environ["XDG_CACHE_HOME"] = WHISPER_CACHE
+os.environ["HF_HOME"] = WHISPER_CACHE
 os.makedirs(WHISPER_CACHE, exist_ok=True)
 
-# ============ 模型（异步加载，避免 Coolify 健康检查超时） ============
-model = None
+# ============ 模型（异步加载） ============
+whisper_model = None
+diarization_pipeline = None
 model_ready = threading.Event()
 model_error = None
 
 
-def _load_model():
-    global model, model_error
+def _load_models():
+    global whisper_model, diarization_pipeline, model_error
     try:
+        # 加载 Whisper
         print(f"正在加载 Whisper {MODEL_NAME} 模型...")
-        model = whisper.load_model(MODEL_NAME, download_root=WHISPER_CACHE)
-        print(f"✅ Whisper {MODEL_NAME} 加载完成！设备: {model.device}")
+        whisper_model = whisper.load_model(MODEL_NAME, download_root=WHISPER_CACHE)
+        print(f"✅ Whisper {MODEL_NAME} 加载完成！设备: {whisper_model.device}")
+
+        # 加载 pyannote 说话人分离
+        if HF_TOKEN:
+            print("正在加载 pyannote 说话人分离模型...")
+            try:
+                from pyannote.audio import Pipeline
+                diarization_pipeline = Pipeline.from_pretrained(
+                    "pyannote/speaker-diarization-3.1",
+                    use_auth_token=HF_TOKEN,
+                    cache_dir=WHISPER_CACHE,
+                )
+                # CPU 模式
+                import torch
+                diarization_pipeline.to(torch.device("cpu"))
+                print("✅ pyannote 说话人分离模型加载完成！")
+            except Exception as e:
+                print(f"⚠️ pyannote 加载失败（说话人分离不可用）: {e}")
+                diarization_pipeline = None
+        else:
+            print("⚠️ 未设置 HF_TOKEN，说话人分离功能不可用")
+
     except Exception as e:
         model_error = str(e)
         print(f"❌ 模型加载失败: {e}")
@@ -50,13 +74,13 @@ def _load_model():
         model_ready.set()
 
 
-threading.Thread(target=_load_model, daemon=True).start()
+threading.Thread(target=_load_models, daemon=True).start()
 
 # ============ FastAPI 应用 ============
 app = FastAPI(
     title="Whisper ASR API",
-    description="语音转写 API（基于 OpenAI Whisper large-v3-turbo）",
-    version="4.0.0",
+    description="语音转写 API（Whisper large-v3-turbo + 说话人分离）",
+    version="5.0.0",
 )
 
 app.add_middleware(
@@ -107,12 +131,47 @@ def cleanup_files(*paths):
                 pass
 
 
-def transcribe_audio(file_path: str, language: str = "zh") -> dict:
+def assign_speakers_to_segments(whisper_segments: list, diarization) -> list:
     """
-    用 Whisper 转写音频。
-    Whisper 内部会自动处理采样率转换，无需手动预处理。
+    将 pyannote 的说话人标签分配给 Whisper 的分段。
+    使用重叠时间最长的说话人。
     """
-    result = model.transcribe(
+    result = []
+    for seg in whisper_segments:
+        seg_start = seg["start"]
+        seg_end = seg["end"]
+        
+        # 找与该分段重叠最多的说话人
+        speaker_overlap = {}
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            overlap_start = max(seg_start, turn.start)
+            overlap_end = min(seg_end, turn.end)
+            if overlap_start < overlap_end:
+                overlap = overlap_end - overlap_start
+                speaker_overlap[speaker] = speaker_overlap.get(speaker, 0) + overlap
+        
+        # 选重叠最多的
+        if speaker_overlap:
+            best_speaker = max(speaker_overlap, key=speaker_overlap.get)
+        else:
+            best_speaker = "UNKNOWN"
+        
+        result.append({
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": seg["text"],
+            "speaker": best_speaker,
+        })
+    
+    return result
+
+
+def transcribe_audio(file_path: str, language: str = "zh", diarize: bool = False) -> dict:
+    """
+    用 Whisper 转写音频，可选说话人分离。
+    """
+    # Whisper 转写
+    result = whisper_model.transcribe(
         file_path,
         language=language,
         verbose=False,
@@ -120,7 +179,7 @@ def transcribe_audio(file_path: str, language: str = "zh") -> dict:
 
     text = result.get("text", "").strip()
 
-    # 提取分段信息
+    # 基础分段
     segments = []
     for seg in result.get("segments", []):
         segments.append({
@@ -129,10 +188,25 @@ def transcribe_audio(file_path: str, language: str = "zh") -> dict:
             "text": seg["text"].strip(),
         })
 
+    # 说话人分离
+    speakers = []
+    if diarize and diarization_pipeline:
+        try:
+            print("正在进行说话人分离...")
+            diarization = diarization_pipeline(file_path)
+            segments = assign_speakers_to_segments(segments, diarization)
+            # 提取唯一说话人列表
+            speakers = sorted(set(s["speaker"] for s in segments if s["speaker"] != "UNKNOWN"))
+            print(f"✅ 说话人分离完成，检测到 {len(speakers)} 位说话人")
+        except Exception as e:
+            print(f"⚠️ 说话人分离失败: {e}")
+            # 保留原始分段，不加 speaker
+
     return {
         "text": text,
         "segments": segments,
         "language": result.get("language", language),
+        "speakers": speakers,
     }
 
 
@@ -140,11 +214,12 @@ def transcribe_audio(file_path: str, language: str = "zh") -> dict:
 @app.get("/")
 async def root():
     return {
-        "status": "ready" if model_ready.is_set() and model else "loading",
+        "status": "ready" if model_ready.is_set() and whisper_model else "loading",
         "service": "Whisper ASR API",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "model": MODEL_NAME,
-        "device": str(model.device) if model else "loading",
+        "device": str(whisper_model.device) if whisper_model else "loading",
+        "diarization": "available" if diarization_pipeline else "unavailable",
     }
 
 
@@ -154,14 +229,18 @@ async def health():
         raise HTTPException(503, f"模型加载失败: {model_error}")
     if not model_ready.is_set():
         return {"status": "loading", "model": MODEL_NAME}
-    return {"status": "healthy", "model": MODEL_NAME}
+    return {
+        "status": "healthy",
+        "model": MODEL_NAME,
+        "diarization": "available" if diarization_pipeline else "unavailable",
+    }
 
 
 def _require_model():
     """确保模型已加载，否则返回 503"""
     if not model_ready.is_set():
         raise HTTPException(503, "模型正在加载中，请稍后重试")
-    if model_error or model is None:
+    if model_error or whisper_model is None:
         raise HTTPException(503, f"模型不可用: {model_error}")
 
 
@@ -169,6 +248,7 @@ def _require_model():
 async def transcribe(
     file: UploadFile = File(...),
     language: str = Query("zh", description="语言代码，如 zh, en, ja"),
+    diarize: bool = Query(False, description="是否启用说话人分离"),
     _: bool = Depends(verify_token),
 ):
     """
@@ -179,15 +259,26 @@ async def transcribe(
 
     Query:
         language: 语言代码 (默认 zh)
+        diarize: 是否启用说话人分离 (默认 false)
 
     Body:
         file: 音频文件 (mp3, wav, m4a, mp4, flac, ogg, webm, wma, aac)
+
+    Response:
+        success: bool
+        text: 完整转写文本
+        segments: [{ start, end, text, speaker? }]
+        speakers: 说话人列表 (仅 diarize=true 时)
+        language: 检测到的语言
     """
     allowed_ext = {".mp3", ".wav", ".m4a", ".mp4", ".flac", ".ogg", ".webm", ".wma", ".aac"}
     file_ext = Path(file.filename).suffix.lower() if file.filename else ".mp3"
 
     if file_ext not in allowed_ext:
         raise HTTPException(400, f"不支持的格式: {file_ext}，支持: {', '.join(sorted(allowed_ext))}")
+
+    if diarize and not diarization_pipeline:
+        raise HTTPException(400, "说话人分离功能不可用（服务器未配置 HF_TOKEN）")
 
     tmp_path = None
     try:
@@ -196,17 +287,21 @@ async def transcribe(
             tmp.write(await file.read())
             tmp_path = tmp.name
 
-        result = transcribe_audio(tmp_path, language=language)
+        result = transcribe_audio(tmp_path, language=language, diarize=diarize)
 
         if not result or not result.get("text"):
             raise HTTPException(500, "转写失败：未识别到语音内容")
 
-        return JSONResponse({
+        response = {
             "success": True,
             "text": result["text"],
             "segments": result["segments"],
             "language": result["language"],
-        })
+        }
+        if diarize:
+            response["speakers"] = result.get("speakers", [])
+
+        return JSONResponse(response)
 
     except HTTPException:
         raise
@@ -220,6 +315,7 @@ async def transcribe(
 async def transcribe_url(
     audio_url: str,
     language: str = Query("zh", description="语言代码，如 zh, en, ja"),
+    diarize: bool = Query(False, description="是否启用说话人分离"),
     _: bool = Depends(verify_token),
 ):
     """
@@ -230,10 +326,14 @@ async def transcribe_url(
 
     Query:
         language: 语言代码 (默认 zh)
+        diarize: 是否启用说话人分离 (默认 false)
 
     Body:
         audio_url: 音频文件 URL
     """
+    if diarize and not diarization_pipeline:
+        raise HTTPException(400, "说话人分离功能不可用（服务器未配置 HF_TOKEN）")
+
     tmp_path = None
     try:
         _require_model()
@@ -251,17 +351,21 @@ async def transcribe_url(
                 tmp.write(chunk)
             tmp_path = tmp.name
 
-        result = transcribe_audio(tmp_path, language=language)
+        result = transcribe_audio(tmp_path, language=language, diarize=diarize)
 
         if not result or not result.get("text"):
             raise HTTPException(500, "转写失败：未识别到语音内容")
 
-        return JSONResponse({
+        response = {
             "success": True,
             "text": result["text"],
             "segments": result["segments"],
             "language": result["language"],
-        })
+        }
+        if diarize:
+            response["speakers"] = result.get("speakers", [])
+
+        return JSONResponse(response)
 
     except requests.RequestException as e:
         raise HTTPException(400, f"下载失败: {str(e)}")
@@ -281,4 +385,5 @@ if __name__ == "__main__":
 
     print(f"🚀 Whisper ASR API 启动在 http://0.0.0.0:{PORT}")
     print(f"   模型: {MODEL_NAME} (异步加载中...)")
+    print(f"   说话人分离: {'启用' if HF_TOKEN else '禁用（需要 HF_TOKEN）'}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
