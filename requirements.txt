@@ -1,7 +1,4 @@
-funasr
-modelscope
-torch
-torchaudio
+openai-whisper
 fastapi
 uvicorn
 requests

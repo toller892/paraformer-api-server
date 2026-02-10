@@ -1,67 +1,83 @@
-# Paraformer ASR API
+# Whisper ASR API
 
-语音转写 API 服务，基于阿里 FunASR Paraformer 模型。
+基于 OpenAI Whisper large-v3-turbo 的语音转写 API 服务。
 
-## 功能
+## 特性
 
-- **自动预处理**：任意音频格式自动转为 16kHz 单声道 WAV
-- **VAD 分段**：内置语音活动检测，长音频自动分段转写
-- **标点恢复**：自动添加中文标点符号
-- **说话人分离**：可选的多说话人识别（CAM++ 模型）
-- **多格式支持**：mp3, wav, m4a, mp4, flac, ogg, webm, wma, aac
+- 🎙️ Whisper large-v3-turbo 模型（高质量中文转写）
+- 🔐 Bearer Token 鉴权
+- 📁 支持文件上传和 URL 转写
+- 🌐 支持多语言（默认中文）
+- 📊 返回分段时间戳
+- 🐳 Docker 一键部署
 
-## 部署
-
-### 环境变量
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `API_TOKEN` | ✅ | API 鉴权 Token |
-| `MODELSCOPE_CACHE` | ❌ | 模型缓存路径（默认 `/data/models`） |
-| `PORT` | ❌ | 服务端口（默认 `8000`） |
-
-### Docker Compose
+## 快速开始
 
 ```bash
-API_TOKEN=your_secret_token docker compose up -d --build
+# 设置 API Token
+export API_TOKEN=your_secret_token
+
+# Docker Compose 启动
+docker compose up -d --build
+
+# 查看日志（首次启动需下载 ~1.5GB 模型）
+docker compose logs -f
 ```
 
-### Coolify
+## API 接口
 
-1. 连接 GitHub 仓库
-2. 设置环境变量 `API_TOKEN`
-3. 添加持久卷挂载 `/data/models`（模型缓存，约 2GB）
-4. 部署
+### 健康检查
 
-## API
+```bash
+curl http://localhost:8000/health
+```
 
-### `GET /health`
-健康检查
-
-### `POST /transcribe`
-转写上传的音频文件
+### 转写音频文件
 
 ```bash
 curl -X POST http://localhost:8000/transcribe \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -F "file=@audio.mp3"
-
-# 启用说话人分离
-curl -X POST "http://localhost:8000/transcribe?diarize=true" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -F "file=@audio.mp3"
+  -H "Authorization: Bearer your_secret_token" \
+  -F "file=@audio.mp3" \
+  -F "language=zh"
 ```
 
-### `POST /transcribe/url`
-从 URL 转写音频（支持 Google Drive）
+### 从 URL 转写
 
 ```bash
-curl -X POST "http://localhost:8000/transcribe/url?audio_url=https://example.com/audio.mp3" \
-  -H "Authorization: Bearer YOUR_TOKEN"
+curl -X POST "http://localhost:8000/transcribe/url?audio_url=https://example.com/audio.mp3&language=zh" \
+  -H "Authorization: Bearer your_secret_token"
 ```
 
-## 注意事项
+## 响应格式
 
-- 首次启动需下载模型（约 1-2GB），请耐心等待
-- CPU 推理较慢，9 分钟音频约需 2-5 分钟处理
-- 建议挂载持久卷避免重复下载模型
+```json
+{
+  "success": true,
+  "text": "完整转写文本",
+  "segments": [
+    {"start": 0.0, "end": 3.5, "text": "分段文本"},
+    ...
+  ],
+  "language": "zh"
+}
+```
+
+## 支持的音频格式
+
+mp3, wav, m4a, mp4, flac, ogg, webm, wma, aac
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `API_TOKEN` | (必填) | API 鉴权 Token |
+| `WHISPER_MODEL` | `large-v3-turbo` | Whisper 模型名称 |
+| `WHISPER_CACHE` | `/data/models` | 模型缓存路径 |
+| `PORT` | `8000` | 服务端口 |
+
+## 资源需求
+
+- **模型大小**: ~1.5GB (large-v3-turbo)
+- **内存**: ~4-6GB (CPU FP32)
+- **CPU**: 推理速度约 2-3x 实时（无 GPU）
+- **GPU**: 如有 CUDA GPU，速度可提升 10-20x
