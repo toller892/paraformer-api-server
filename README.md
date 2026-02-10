@@ -1,76 +1,67 @@
-# Paraformer API 部署指南
+# Paraformer ASR API
 
-## 服务器要求
-- 内存：4GB+
-- Python：3.10+
-- 公网 IP + 开放 8000 端口
+语音转写 API 服务，基于阿里 FunASR Paraformer 模型。
 
----
+## 功能
 
-## 方式一：Docker / Coolify 部署（推荐）
+- **自动预处理**：任意音频格式自动转为 16kHz 单声道 WAV
+- **VAD 分段**：内置语音活动检测，长音频自动分段转写
+- **标点恢复**：自动添加中文标点符号
+- **说话人分离**：可选的多说话人识别（CAM++ 模型）
+- **多格式支持**：mp3, wav, m4a, mp4, flac, ogg, webm, wma, aac
+
+## 部署
 
 ### 环境变量
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `API_TOKEN` | ✅ | API 鉴权 Token |
-| `MODELSCOPE_CACHE` | 可选 | 模型缓存路径，默认 `/data/models` |
+| `MODELSCOPE_CACHE` | ❌ | 模型缓存路径（默认 `/data/models`） |
+| `PORT` | ❌ | 服务端口（默认 `8000`） |
 
 ### Docker Compose
 
 ```bash
-# 设置 Token
-export API_TOKEN=你的密钥
-
-# 启动（首次会下载模型约 1GB，请耐心等待）
-docker compose up -d
+API_TOKEN=your_secret_token docker compose up -d --build
 ```
 
-### Coolify 部署
+### Coolify
 
-1. 在 Coolify 中创建新服务，选择 **Docker Compose** 类型
-2. 关联此 GitHub 仓库
-3. 设置环境变量 `API_TOKEN`
-4. **关键：配置持久卷** — 将 `model-cache` 卷挂载到 `/data/models`
-   - 这样模型只需首次下载（~1GB），后续重新部署直接使用缓存
-5. 部署即可
+1. 连接 GitHub 仓库
+2. 设置环境变量 `API_TOKEN`
+3. 添加持久卷挂载 `/data/models`（模型缓存，约 2GB）
+4. 部署
 
-> ⚠️ 首次启动需要下载约 1GB 的模型文件（paraformer-zh + cam++），请确保部署超时时间足够长。后续重建容器会直接命中卷缓存，秒级启动。
+## API
 
----
+### `GET /health`
+健康检查
 
-## 方式二：裸机部署
+### `POST /transcribe`
+转写上传的音频文件
 
 ```bash
-# 1. 安装依赖
-pip install fastapi uvicorn funasr modelscope torch torchaudio requests
+curl -X POST http://localhost:8000/transcribe \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@audio.mp3"
 
-# 2. 上传 paraformer_api.py 到服务器
-
-# 3. 启动服务（设置你的 Token）
-API_TOKEN=你的密钥 python paraformer_api.py
+# 启用说话人分离
+curl -X POST "http://localhost:8000/transcribe?diarize=true" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@audio.mp3"
 ```
 
-首次启动会下载模型（约 1GB），请耐心等待。
-
-### 后台运行
+### `POST /transcribe/url`
+从 URL 转写音频（支持 Google Drive）
 
 ```bash
-API_TOKEN=你的密钥 nohup python paraformer_api.py > api.log 2>&1 &
+curl -X POST "http://localhost:8000/transcribe/url?audio_url=https://example.com/audio.mp3" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
----
+## 注意事项
 
-## 验证
-
-```bash
-curl http://服务器IP:8000/health
-```
-
-## API 端点
-
-- `GET /health` — 健康检查
-- `POST /transcribe` — 上传音频转写（支持 `?diarize=true` 说话人分离）
-- `POST /transcribe/url` — URL 音频转写
-
-所有 POST 端点需要 `Authorization: Bearer <token>` 头。
+- 首次启动需下载模型（约 1-2GB），请耐心等待
+- CPU 推理较慢，9 分钟音频约需 2-5 分钟处理
+- 建议挂载持久卷避免重复下载模型
