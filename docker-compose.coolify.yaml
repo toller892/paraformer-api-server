@@ -1,0 +1,21 @@
+services:
+  whisper-api:
+    build: .
+    environment:
+      - SERVICE_URL_WHISPER-API
+      - SERVICE_URL_WHISPER-API_8000
+      - API_TOKEN=${API_TOKEN:?}
+      - WHISPER_MODEL=large-v3-turbo
+      - WHISPER_CACHE=/data/models
+    volumes:
+      - model-cache:/data/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
+
+volumes:
+  model-cache:
